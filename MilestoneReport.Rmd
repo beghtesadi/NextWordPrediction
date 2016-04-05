@@ -1,0 +1,148 @@
+---
+title: "Milestone Report"
+author: "Bahareh Eghtesadi"
+date: "March 20, 2016"
+output: html_document
+---
+
+In this report, the goal is to perform an exploratory analysis on data set. First, I represent how the data is downloaded, perform some statistics on data, and finally briefly explain how the prediction should be implemented.
+
+# Obtaining data
+First, the working directory is set, then data is downloaded as follows:
+```{r, results=FALSE}
+library(stringi)
+library(NLP)
+library(tm)
+library(ggplot2)
+library(RWeka)
+library(reshape2)
+
+setwd("/home/bahar/projects/NextWord")
+
+if (!file.exists("/home/bahar/COURSERA/Data/final"))
+{
+  DataZip <- download.file("http://d396qusza40orc.cloudfront.net/dsscapstone/dataset/Coursera-SwiftKey.zip", 
+  destfile = "Coursera-SwiftKey.zip" , method = "curl")
+  
+  unzip("Coursera-SwiftKey.zip")
+}
+```
+
+The, using "readLines" function, the data is read:
+
+```{r , cache=TRUE}
+blogs <- readLines("/home/bahar/COURSERA/Data/final/en_US/en_US.blogs.txt", encoding = "UTF-8" , skipNul = TRUE)
+news <- readLines("/home/bahar/COURSERA/Data/final/en_US/en_US.news.txt", encoding = "UTF-8" , skipNul = TRUE)
+twitter <- readLines("/home/bahar/COURSERA/Data/final/en_US/en_US.twitter.txt", encoding = "UTF-8", skipNul = TRUE)
+```
+
+Then, a summary of the data is provided. The size of each file, number of lines, and number of words at each file is summarized in a a table as follows:
+```{r}
+#Checking the size of each file
+blogSize <- file.info("/home/bahar/COURSERA/Data/final/en_US/en_US.blogs.txt")$size / 1024^2
+newsSize <- file.info("/home/bahar/COURSERA/Data/final/en_US/en_US.news.txt")$size / 1024^2
+twitterSize <- file.info("/home/bahar/COURSERA/Data/final/en_US/en_US.twitter.txt")$size / 1024^2
+
+# Counting the number of words at each file
+blogsWords <- stri_count_words(blogs)
+newsWords <- stri_count_words(news)
+twitterWords <- stri_count_words(twitter)
+
+#Counting the number of lines at each file
+blogsLines <- length(blogs)
+newsLines <- length(news)
+twitterLines <- length(twitter)
+
+#Creating a table
+summary <- data.frame(Blogs = c(blogSize,blogsLines , sum(blogsWords) ), News = c(newsSize,newsLines , sum(newsWords)), 
+                     Twitter = c(twitterSize, twitterLines , sum(twitterWords)), row.names = c('File Size' , 'Number of Lines' ,                          'Number of Words'))
+summary
+```
+
+#Cleaning Data
+In order to perform some exploratory analysis, we create a sample from the data. 
+```{r}
+blogsSample <- sample(blogs , length(blogs) *0.01)
+newsSample <- sample(news , length(news) *0.01)
+twitterSample <- sample(twitter , length(twitter) *0.01)
+
+SampleData <- c(blogsSample , newsSample , twitterSample)
+```
+
+Then, we need to create a corpus, and perform some cleaning on the data. The cleaning includes transfering all the words to lowercase, removing punctuations, numbers, URLs, and white spaces. In addition, english stop words are filtered. All these are done as follows:
+```{r}
+#Create the corpus and do the transformations
+SampleCorpus <- VCorpus(VectorSource(SampleData))
+
+SampleCorpus <- tm_map(SampleCorpus, content_transformer(tolower))
+SampleCorpus <- tm_map(SampleCorpus, content_transformer(removePunctuation))
+SampleCorpus <- tm_map(SampleCorpus, content_transformer(removeNumbers))
+removeURL <- function(x) gsub("http[[:alnum:]]*", "", x)
+SampleCorpus <- tm_map(SampleCorpus, content_transformer(removeURL))
+SampleCorpus <- tm_map(SampleCorpus, stripWhitespace)
+SampleCorpus <- tm_map(SampleCorpus,  removeWords, stopwords("english")) 
+SampleCorpus <- tm_map(SampleCorpus, PlainTextDocument)   
+```
+
+#Tokenizing 
+In this step, we tokenize the data and create TermDocumentMatrix. 
+```{r}
+options(mc.cores=1)
+
+BigramTokenizer <- function(x) NGramTokenizer(x, Weka_control(min=2, max=2))
+TrigramTokenizer <- function(x) NGramTokenizer(x, Weka_control(min=3, max=3))
+freq <- function(tdm)
+{
+  freq <- sort(rowSums(as.matrix(tdm)), decreasing=TRUE)
+  freq_frame <- data.frame(word=names(freq), freq=freq)
+  return(freq_frame)
+}
+
+TDMatrix <- TermDocumentMatrix(SampleCorpus)
+TDMatrix2 <- TermDocumentMatrix(SampleCorpus , control=list(tokenize=BigramTokenizer))
+TDMatrix3 <- TermDocumentMatrix(SampleCorpus, control=list(tokenize=TrigramTokenizer))
+```
+
+#Frequences
+Now, using the TermDocumentMatrix, we can find the frequency of each word in all documents. Also, using removeSparseTerms function, we remove all the words that have not appeared more than a threshold.
+```{r}
+TDMatrix <- removeSparseTerms(TDMatrix, 0.999)
+unifreq <- freq(TDMatrix)
+
+TDMatrix2 <- removeSparseTerms(TDMatrix2, 0.999)
+biofreq <- freq(TDMatrix2)
+
+TDMatrix3 <- removeSparseTerms(TDMatrix3, 0.9999)
+trifreq <- freq(TDMatrix3)
+```
+
+Now, we can check the frequency of the words. In the following, 20 most appeared unigrams, biograms, and trigrams are represented in figures.
+```{r}
+g <- ggplot(unifreq[1:20,], aes(x=reorder(unifreq$word[1:20], unifreq$freq[1:20]), y=unifreq$freq[1:20])) +
+    geom_bar(stat = "identity") +  coord_flip() +
+    theme(legend.title=element_blank()) +
+    xlab("Unigram") + ylab("Frequency") +
+    labs(title = "Top Unigrams by Frequency")
+g
+```
+ 
+```{r}
+g <- ggplot(biofreq[1:20,], aes(x=reorder(biofreq$word[1:20], biofreq$freq[1:20]), y=biofreq$freq[1:20])) +
+    geom_bar(stat = "identity") +  coord_flip() +
+    theme(legend.title=element_blank()) +
+    xlab("Biogram") + ylab("Frequency") +
+    labs(title = "Top Biograms by Frequency")
+g
+```
+
+```{r}
+g <- ggplot(trifreq[1:20,], aes(x=reorder(trifreq$word[1:20], trifreq$freq[1:20]), y=trifreq$freq[1:20])) +
+    geom_bar(stat = "identity") +  coord_flip() +
+    theme(legend.title=element_blank()) +
+    xlab("Trigram") + ylab("Frequency") +
+    labs(title = "Top Trigrams by Frequency")
+g
+```
+
+As can be seen form the figures, "will" is the most common word, right now" is the most common bio-gram, "happy mothers day" is the most tri-gram.
+In the next step, in order to make predictions, we will use the n-gram models. For a given word, first the 3-gram model is checked, if not found, we back off to 2-grams, 1-grams respectively.
